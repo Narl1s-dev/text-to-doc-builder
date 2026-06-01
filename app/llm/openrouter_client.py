@@ -24,7 +24,12 @@ class OpenRouterClient:
         self.timeout_seconds = timeout_seconds
 
     @classmethod
-    def from_settings(cls, settings: Settings | None = None) -> "OpenRouterClient":
+    def from_settings(
+        cls,
+        settings: Settings | None = None,
+        *,
+        model: str | None = None,
+    ) -> "OpenRouterClient":
         settings = settings or get_settings()
         api_key = (
             settings.openrouter_api_key.get_secret_value().strip()
@@ -33,12 +38,13 @@ class OpenRouterClient:
         )
         if not api_key:
             raise ConfigurationError("OPENROUTER_API_KEY is not configured.")
-        if not settings.openrouter_model or not settings.openrouter_model.strip():
+        selected_model = model or settings.openrouter_model
+        if not selected_model or not selected_model.strip():
             raise ConfigurationError("OPENROUTER_MODEL is not configured.")
 
         return cls(
             api_key=api_key,
-            model=settings.openrouter_model.strip(),
+            model=selected_model.strip(),
             base_url=settings.openrouter_base_url,
             timeout_seconds=settings.openrouter_timeout_seconds,
         )

@@ -6,6 +6,7 @@ from typing import Any
 from app.core.config import Settings, get_settings
 from app.schemas.artifact_plan import ArtifactBlock, ArtifactPlan
 from app.schemas.document import DocumentCreateRequest
+from app.schemas.document_spec import DocumentSpec, document_spec_from_plan
 from app.schemas.formats import (
     DEFAULT_OUTPUT_FORMAT,
     infer_artifact_format_from_prompt,
@@ -74,7 +75,39 @@ class DefaultsResolver:
     def fallback_plan(self, payload: DocumentCreateRequest) -> LLMPlanningFallback:
         spec, spec_warnings = self.resolve_generation_spec(payload)
         plan, plan_warnings = self.resolve_artifact_plan(spec, payload)
-        return LLMPlanningFallback(spec, plan, spec_warnings + plan_warnings)
+        document_spec, document_spec_warnings = self.resolve_document_spec(spec, plan)
+        return LLMPlanningFallback(
+            spec,
+            document_spec,
+            plan,
+            spec_warnings + plan_warnings + document_spec_warnings,
+        )
+
+    def resolve_document_spec(
+        self,
+        spec: GenerationSpec,
+        artifact_plan: ArtifactPlan,
+        parsed_document_spec: DocumentSpec | dict[str, Any] | None = None,
+    ) -> tuple[DocumentSpec, list[str]]:
+        if parsed_document_spec:
+            data = _to_dict(parsed_document_spec)
+            data["output_format"] = artifact_plan.output_format
+            data["title"] = data.get("title") or artifact_plan.title or spec.title
+            data["document_type"] = data.get("document_type") or spec.document_type
+            data["language"] = data.get("language") or spec.language
+            data["audience"] = data.get("audience") or spec.audience
+            data["tone"] = data.get("tone") or spec.tone
+            data["style"] = data.get("style") or spec.style
+            data["formatting"] = self._merge_formatting(data.get("formatting"))
+            data["source_facts"] = data.get("source_facts") or spec.source_facts
+
+            content = data.get("content_markdown")
+            if isinstance(content, str) and content.strip():
+                return DocumentSpec.model_validate(data), []
+
+        return document_spec_from_plan(spec, artifact_plan), [
+            "Document spec content_markdown was derived from artifact_plan blocks."
+        ]
 
     def _base_generation_spec_data(self, payload: DocumentCreateRequest) -> dict[str, Any]:
         return {
@@ -114,11 +147,12 @@ class DefaultsResolver:
 @dataclass(frozen=True)
 class LLMPlanningFallback:
     generation_spec: GenerationSpec
+    document_spec: DocumentSpec
     artifact_plan: ArtifactPlan
     warnings: list[str]
 
 
-def _to_dict(value: GenerationSpec | ArtifactPlan | dict[str, Any]) -> dict[str, Any]:
+def _to_dict(value: GenerationSpec | DocumentSpec | ArtifactPlan | dict[str, Any]) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
     return value.model_dump(mode="json", exclude_none=True)

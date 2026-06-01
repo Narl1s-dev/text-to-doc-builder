@@ -1,0 +1,14 @@
+.git
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.venv
+__pycache__
+*.py[cod]
+*.egg-info
+.env
+storage
+tests
+docs
+plan.md
+CONTEXT.md

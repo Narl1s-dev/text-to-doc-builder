@@ -1,0 +1,51 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: text-to-doc-builder:local
+    container_name: text-to-doc-builder-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_ENV: server
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      DATABASE_URL: sqlite:///./storage/app.db
+      ARTIFACT_STORAGE_PATH: ./storage/artifacts
+      WORKER_ENABLED: "false"
+    ports:
+      - "${HOST_HTTP_PORT:-80}:8000"
+    volumes:
+      - text_to_doc_storage:/app/storage
+
+  worker:
+    image: text-to-doc-builder:local
+    container_name: text-to-doc-builder-worker
+    user: "0:0"
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_ENV: server
+      DATABASE_URL: sqlite:///./storage/app.db
+      ARTIFACT_STORAGE_PATH: ./storage/artifacts
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      - api
+    volumes:
+      - text_to_doc_storage:/app/storage
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  docx-runtime:
+    build:
+      context: ./sandbox/docx-runtime
+      dockerfile: Dockerfile
+    image: text-to-doc-builder-docx-runtime:local
+    profiles:
+      - runtime
+    command: ["python", "-c", "print('docx runtime ready')"]
+
+volumes:
+  text_to_doc_storage:

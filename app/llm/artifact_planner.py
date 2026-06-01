@@ -25,6 +25,7 @@ class LLMArtifactPlanner:
             fallback = self.defaults_resolver.fallback_plan(payload)
             return LLMPlanningResult(
                 generation_spec=fallback.generation_spec,
+                document_spec=fallback.document_spec,
                 artifact_plan=fallback.artifact_plan,
                 warnings=[
                     str(exc),
@@ -44,11 +45,21 @@ class LLMArtifactPlanner:
             payload,
             parsed_response.artifact_plan,
         )
+        document_spec, document_spec_warnings = self.defaults_resolver.resolve_document_spec(
+            spec,
+            plan,
+            parsed_response.document_spec,
+        )
 
         return LLMPlanningResult(
             generation_spec=spec,
+            document_spec=document_spec,
             artifact_plan=plan,
-            warnings=[*parsed_response.warnings, *spec_warnings, *plan_warnings],
+            warnings=[
+                *parsed_response.warnings,
+                *spec_warnings,
+                *plan_warnings,
+                *document_spec_warnings,
+            ],
             raw_output=raw_output,
         )
-

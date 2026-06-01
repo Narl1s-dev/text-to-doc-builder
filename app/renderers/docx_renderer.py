@@ -7,6 +7,7 @@ from docx.shared import Cm, Pt
 from app.core.config import Settings, get_settings
 from app.renderers.base import RenderedArtifact
 from app.schemas.artifact_plan import ArtifactBlock, ArtifactPlan
+from app.schemas.document_spec import DocumentSpec
 from app.schemas.formats import ArtifactFormat
 
 
@@ -16,7 +17,7 @@ class DocxRenderer:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
 
-    def render(self, artifact_id: str, plan: ArtifactPlan) -> RenderedArtifact:
+    def render(self, artifact_id: str, plan: ArtifactPlan | DocumentSpec) -> RenderedArtifact:
         storage_path = self.settings.artifact_storage_path
         storage_path.mkdir(parents=True, exist_ok=True)
 
@@ -25,7 +26,10 @@ class DocxRenderer:
 
         document = Document()
         self._apply_formatting(document, plan)
-        self._render_blocks(document, plan)
+        if isinstance(plan, DocumentSpec):
+            self._render_document_spec(document, plan)
+        else:
+            self._render_blocks(document, plan)
         document.save(file_path)
 
         return RenderedArtifact(
@@ -86,3 +90,102 @@ class DocxRenderer:
             for column_index in range(column_count):
                 value = row[column_index] if column_index < len(row) else ""
                 table.rows[row_index].cells[column_index].text = value
+
+    def _render_document_spec(self, document: Document, spec: DocumentSpec) -> None:
+        lines = spec.content_markdown.splitlines()
+        paragraph_buffer: list[str] = []
+
+        def flush_paragraph() -> None:
+            if paragraph_buffer:
+                document.add_paragraph(" ".join(paragraph_buffer).strip())
+                paragraph_buffer.clear()
+
+        index = 0
+        while index < len(lines):
+            raw_line = lines[index]
+            line = raw_line.strip()
+
+            if not line:
+                flush_paragraph()
+                index += 1
+                continue
+
+            if line.startswith("|"):
+                flush_paragraph()
+                table_lines: list[str] = []
+                while index < len(lines) and lines[index].strip().startswith("|"):
+                    table_lines.append(lines[index].strip())
+                    index += 1
+                self._add_markdown_table(document, table_lines)
+                continue
+
+            heading_level = _markdown_heading_level(line)
+            if heading_level is not None:
+                flush_paragraph()
+                text = line[heading_level + 1 :].strip()
+                document.add_heading(text or spec.title, level=min(heading_level, 6))
+                index += 1
+                continue
+
+            bullet_text = _strip_bullet_marker(line)
+            if bullet_text is not None:
+                flush_paragraph()
+                document.add_paragraph(bullet_text, style="List Bullet")
+                index += 1
+                continue
+
+            numbered_text = _strip_numbered_marker(line)
+            if numbered_text is not None:
+                flush_paragraph()
+                document.add_paragraph(numbered_text, style="List Number")
+                index += 1
+                continue
+
+            paragraph_buffer.append(line)
+            index += 1
+
+        flush_paragraph()
+
+    def _add_markdown_table(self, document: Document, table_lines: list[str]) -> None:
+        rows = [_split_markdown_table_row(line) for line in table_lines]
+        rows = [row for row in rows if row and not _is_markdown_separator_row(row)]
+        if not rows:
+            return
+
+        block = ArtifactBlock(type="table", rows=rows)
+        self._add_table(document, block)
+
+
+def _markdown_heading_level(line: str) -> int | None:
+    marker_length = len(line) - len(line.lstrip("#"))
+    if marker_length == 0 or marker_length > 6:
+        return None
+    if len(line) <= marker_length or line[marker_length] != " ":
+        return None
+    return marker_length
+
+
+def _strip_bullet_marker(line: str) -> str | None:
+    for marker in ("- ", "* "):
+        if line.startswith(marker):
+            text = line[len(marker) :].strip()
+            return text or None
+    return None
+
+
+def _strip_numbered_marker(line: str) -> str | None:
+    marker_index = line.find(". ")
+    if marker_index <= 0:
+        return None
+    if not line[:marker_index].isdigit():
+        return None
+    text = line[marker_index + 2 :].strip()
+    return text or None
+
+
+def _split_markdown_table_row(line: str) -> list[str]:
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
+def _is_markdown_separator_row(row: list[str]) -> bool:
+    return all(cell and set(cell) <= {"-", ":"} for cell in row)

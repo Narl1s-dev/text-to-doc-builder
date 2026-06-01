@@ -34,7 +34,11 @@ def infer_artifact_format_from_prompt(prompt: str) -> ArtifactFormat | None:
     format_keywords = {
         ArtifactFormat.pptx: (
             "презентац",
+            "презенташ",
+            "преза",
+            "презу",
             "слайд",
+            "deck",
             "slides",
             "presentation",
             "pptx",

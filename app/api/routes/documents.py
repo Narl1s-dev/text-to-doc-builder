@@ -8,6 +8,11 @@ from app.api.dependencies import verify_internal_token
 from app.db.session import get_db_session
 from app.repositories.artifact_repository import ArtifactRepository
 from app.schemas.document import DocumentCreateRequest, DocumentCreateResponse, DocumentInfoResponse
+from app.schemas.formats import (
+    infer_artifact_format_from_prompt,
+    is_render_supported,
+    supported_render_format_values,
+)
 from app.services.generation_service import GenerationService
 from app.services.storage_service import StorageService
 
@@ -22,14 +27,25 @@ router = APIRouter(
 @router.post(
     "",
     response_model=DocumentCreateResponse,
-    status_code=status.HTTP_201_CREATED,
+    status_code=status.HTTP_202_ACCEPTED,
 )
 def create_document(
     payload: DocumentCreateRequest,
     db_session: Annotated[Session, Depends(get_db_session)],
 ) -> DocumentCreateResponse:
+    inferred_format = infer_artifact_format_from_prompt(payload.prompt)
+    if payload.output_format is None and inferred_format is not None and not is_render_supported(inferred_format):
+        supported_formats = ", ".join(supported_render_format_values())
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Output format '{inferred_format}' was inferred from the prompt, "
+                f"but is not supported yet. Supported formats: {supported_formats}."
+            ),
+        )
+
     service = GenerationService(db_session)
-    return service.create_processing_artifact(payload)
+    return service.enqueue_document(payload)
 
 
 @router.get("/{document_id}", response_model=DocumentInfoResponse)
@@ -37,24 +53,11 @@ def get_document(
     document_id: str,
     db_session: Annotated[Session, Depends(get_db_session)],
 ) -> DocumentInfoResponse:
-    artifact = ArtifactRepository(db_session).get_by_id(document_id)
-    if artifact is None:
+    document = GenerationService(db_session).get_document_info(document_id)
+    if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
 
-    download_url = None
-    if artifact.status == "ready":
-        download_url = f"/documents/{artifact.id}/download"
-
-    return DocumentInfoResponse(
-        document_id=artifact.id,
-        request_id=artifact.request_id,
-        status=artifact.status,
-        output_format=artifact.output_format,
-        file_name=artifact.file_name,
-        download_url=download_url,
-        error_message=artifact.error_message,
-        warnings=artifact.warnings,
-    )
+    return document
 
 
 @router.get("/{document_id}/download")

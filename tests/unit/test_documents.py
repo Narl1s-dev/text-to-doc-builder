@@ -1,3 +1,6 @@
+import json
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 from docx import Document
@@ -5,6 +8,21 @@ from docx import Document
 from app.core.config import get_settings
 from app.db.session import get_engine
 from app.main import create_app
+
+
+def wait_for_document(client: TestClient, document_id: str, timeout_seconds: float = 5.0) -> dict:
+    deadline = time.monotonic() + timeout_seconds
+    last_data = None
+
+    while time.monotonic() < deadline:
+        response = client.get(f"/documents/{document_id}")
+        assert response.status_code == 200
+        last_data = response.json()
+        if last_data["status"] in {"ready", "failed", "canceled"}:
+            return last_data
+        time.sleep(0.05)
+
+    pytest.fail(f"Document {document_id} did not finish in time. Last response: {last_data}")
 
 
 @pytest.fixture(autouse=True)
@@ -31,12 +49,17 @@ def test_create_document_creates_ready_docx_artifact(tmp_path) -> None:
             },
         )
 
-    data = response.json()
+        queued_data = response.json()
+        data = wait_for_document(client, queued_data["document_id"])
 
-    assert response.status_code == 201
+    assert response.status_code == 202
+    assert queued_data["status"] == "queued"
+    assert queued_data["status_url"] == f"/documents/{queued_data['document_id']}"
     assert data["document_id"].startswith("art_")
     assert data["request_id"].startswith("req_")
+    assert data["job_id"].startswith("job_")
     assert data["status"] == "ready"
+    assert data["current_stage"] == "completed"
     assert data["output_format"] == "docx"
     assert data["file_name"] == f"{data['document_id']}.docx"
     assert data["download_url"] == f"/documents/{data['document_id']}/download"
@@ -48,6 +71,12 @@ def test_create_document_creates_ready_docx_artifact(tmp_path) -> None:
     paragraphs = [paragraph.text for paragraph in document.paragraphs]
     assert "Итоги встречи" in paragraphs
 
+    document_spec_path = tmp_path / f"{data['document_id']}.document_spec.json"
+    document_spec = json.loads(document_spec_path.read_text(encoding="utf-8"))
+    assert document_spec["schema_version"] == "document_spec.v1"
+    assert document_spec["output_format"] == "docx"
+    assert "Итоги встречи" in document_spec["content_markdown"]
+
 
 def test_create_document_file_can_be_downloaded() -> None:
     with TestClient(create_app()) as client:
@@ -56,6 +85,7 @@ def test_create_document_file_can_be_downloaded() -> None:
             json={"prompt": "Сделай краткий документ по итогам встречи"},
         )
         document_id = create_response.json()["document_id"]
+        wait_for_document(client, document_id)
 
         info_response = client.get(f"/documents/{document_id}")
         download_response = client.get(f"/documents/{document_id}/download")
@@ -75,8 +105,8 @@ def test_create_document_docx_contains_fallback_prompt(tmp_path) -> None:
             "/documents",
             json={"prompt": "Сделай краткий документ по итогам встречи"},
         )
+        data = wait_for_document(client, response.json()["document_id"])
 
-    data = response.json()
     document_path = tmp_path / data["file_name"]
     document = Document(document_path)
     paragraphs = [paragraph.text for paragraph in document.paragraphs]
@@ -106,7 +136,7 @@ def test_create_document_rejects_future_format_until_renderer_exists() -> None:
     assert "not supported yet" in response.text
 
 
-def test_create_document_infers_future_format_from_prompt_and_fails_clearly() -> None:
+def test_create_document_rejects_inferred_future_format_before_enqueue() -> None:
     with TestClient(create_app()) as client:
         response = client.post(
             "/documents",
@@ -115,15 +145,9 @@ def test_create_document_infers_future_format_from_prompt_and_fails_clearly() ->
             },
         )
 
-    data = response.json()
-
-    assert response.status_code == 201
-    assert data["status"] == "failed"
-    assert data["output_format"] == "pptx"
-    assert data["file_name"] is None
-    assert data["download_url"] is None
-    assert data["error_message"] == "Формат 'pptx' пока не поддерживается"
-    assert "Renderer for 'pptx' is not configured." in data["warnings"]
+    assert response.status_code == 422
+    assert "was inferred from the prompt" in response.text
+    assert "not supported yet" in response.text
 
 
 def test_create_document_checks_internal_token(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -140,4 +164,4 @@ def test_create_document_checks_internal_token(monkeypatch: pytest.MonkeyPatch) 
         )
 
     assert missing_token_response.status_code == 401
-    assert valid_token_response.status_code == 201
+    assert valid_token_response.status_code == 202

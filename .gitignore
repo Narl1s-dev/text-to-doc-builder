@@ -6,6 +6,7 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 *.egg-info/
+deploy.zip
 storage/*.db
 storage/*.log
 storage/artifacts/*

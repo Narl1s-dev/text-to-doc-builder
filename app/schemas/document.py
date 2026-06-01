@@ -15,9 +15,11 @@ OutputFormat = ArtifactFormat
 
 
 class ArtifactStatus(StrEnum):
+    queued = "queued"
     processing = "processing"
     ready = "ready"
     failed = "failed"
+    canceled = "canceled"
 
 
 class DocumentCreateRequest(BaseModel):
@@ -50,9 +52,12 @@ class DocumentCreateRequest(BaseModel):
 class DocumentCreateResponse(BaseModel):
     document_id: str
     request_id: str
+    job_id: str | None = None
     status: ArtifactStatus
+    current_stage: str | None = None
     output_format: OutputFormat
     file_name: str | None = None
+    status_url: str | None = None
     download_url: str | None = None
     error_message: str | None = None
     warnings: list[str] = Field(default_factory=list)
@@ -61,9 +66,12 @@ class DocumentCreateResponse(BaseModel):
 class DocumentInfoResponse(BaseModel):
     document_id: str
     request_id: str
+    job_id: str | None = None
     status: ArtifactStatus
+    current_stage: str | None = None
     output_format: OutputFormat
     file_name: str | None = None
+    status_url: str | None = None
     download_url: str | None = None
     error_message: str | None = None
     warnings: list[str] = Field(default_factory=list)

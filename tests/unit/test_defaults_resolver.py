@@ -41,6 +41,17 @@ def test_defaults_resolver_infers_future_format_from_prompt() -> None:
     assert fallback.artifact_plan.output_format == ArtifactFormat.pptx
 
 
+def test_defaults_resolver_infers_future_format_from_colloquial_prompt() -> None:
+    resolver = DefaultsResolver(Settings())
+    payload = DocumentCreateRequest(prompt="Создай презенташку по выцветанию кораллов")
+
+    fallback = resolver.fallback_plan(payload)
+
+    assert fallback.generation_spec.output_format == ArtifactFormat.pptx
+    assert fallback.document_spec.output_format == ArtifactFormat.pptx
+    assert fallback.artifact_plan.output_format == ArtifactFormat.pptx
+
+
 def test_defaults_resolver_prompt_format_beats_llm_default_docx() -> None:
     resolver = DefaultsResolver(Settings())
     payload = DocumentCreateRequest(prompt="Сделай презентацию")

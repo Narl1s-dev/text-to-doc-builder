@@ -4,7 +4,7 @@ from app.schemas.document import DocumentCreateRequest
 
 
 class PromptBuilder:
-    prompt_version = "generation-planning-v1"
+    prompt_version = "document-spec-planning-v1"
 
     def build_planning_messages(self, payload: DocumentCreateRequest) -> list[dict[str, str]]:
         system_prompt = """
@@ -12,11 +12,13 @@ You are a document generation planner.
 Return only valid JSON, without markdown fences or explanations.
 The JSON must contain exactly these top-level keys:
 - generation_spec
+- document_spec
 - artifact_plan
 - warnings
 
-The service prototype can render only docx now. If the user asks for another format,
-record that in warnings and normalize output_format to "docx".
+The service prototype can render only docx now. Still preserve the user's requested
+output_format in generation_spec, document_spec, and artifact_plan; the backend will
+validate renderer support after planning.
 
 generation_spec fields:
 output_format, document_type, title, language, audience, tone, style, length,
@@ -24,6 +26,13 @@ source_facts, constraints, formatting, structure.
 
 artifact_plan fields:
 artifact_type, output_format, title, blocks, formatting, metadata.
+
+document_spec fields:
+schema_version, output_format, document_type, title, language, audience, tone, style,
+formatting, content_markdown, source_facts, metadata.
+
+content_markdown must contain the full document content in Markdown. Use headings,
+paragraphs, bullet lists, numbered lists, and Markdown tables where appropriate.
 
 Supported artifact_plan block types:
 - heading: { "type": "heading", "level": 1, "text": "..." }
@@ -52,4 +61,3 @@ Preserve user facts. Do not invent critical facts.
                 "content": json.dumps(user_payload, ensure_ascii=False, indent=2),
             },
         ]
-

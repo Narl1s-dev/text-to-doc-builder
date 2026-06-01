@@ -1,6 +1,6 @@
 from app.core.errors import AppError
 from app.renderers.base import BaseRenderer
-from app.renderers.docx_renderer import DocxRenderer
+from app.renderers.codegen_docx_renderer import CodegenDocxRenderer
 from app.schemas.formats import ArtifactFormat, normalize_artifact_format
 
 
@@ -10,7 +10,7 @@ class UnsupportedRendererError(AppError):
 
 class RendererRegistry:
     def __init__(self, renderers: list[BaseRenderer] | None = None) -> None:
-        configured_renderers = renderers or [DocxRenderer()]
+        configured_renderers = renderers or [CodegenDocxRenderer()]
         self._renderers = {renderer.output_format: renderer for renderer in configured_renderers}
 
     def get(self, output_format: ArtifactFormat | str) -> BaseRenderer:

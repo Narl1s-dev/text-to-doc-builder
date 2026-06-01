@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from app.core.config import Settings
 from app.llm.openrouter_client import OpenRouterError
 from app.llm.schemas import LLMPlanningResult
 from app.renderers.base import RenderedArtifact
@@ -71,8 +72,14 @@ class RendererRegistryStub:
         return self.renderer
 
 
+class ExplodingRendererRegistry:
+    def get(self, output_format: str):
+        raise AssertionError("Renderer registry should not be called for unsupported formats")
+
+
 def test_generation_pipeline_returns_success_for_planned_docx(tmp_path) -> None:
     pipeline = GenerationPipeline(
+        settings=Settings(artifact_storage_path=tmp_path),
         planner=SuccessfulPlanner(),
         renderers=RendererRegistryStub(SuccessfulRenderer(tmp_path)),
     )
@@ -84,12 +91,16 @@ def test_generation_pipeline_returns_success_for_planned_docx(tmp_path) -> None:
 
     assert isinstance(result, PipelineSuccess)
     assert result.planning.artifact_plan.title == "План встречи"
+    assert result.planning.document_spec.title == "План встречи"
+    assert result.document_spec_path is not None
+    assert result.document_spec_path.exists()
     assert result.rendered_artifact.file_name == "art_123.docx"
     assert result.rendered_artifact.file_size == 4
 
 
 def test_generation_pipeline_returns_planning_failure_for_openrouter_error(tmp_path) -> None:
     pipeline = GenerationPipeline(
+        settings=Settings(artifact_storage_path=tmp_path),
         planner=FailingPlanner(),
         renderers=RendererRegistryStub(SuccessfulRenderer(tmp_path)),
     )
@@ -106,8 +117,9 @@ def test_generation_pipeline_returns_planning_failure_for_openrouter_error(tmp_p
     assert result.planning is None
 
 
-def test_generation_pipeline_returns_rendering_failure_with_planning_snapshot() -> None:
+def test_generation_pipeline_returns_rendering_failure_with_planning_snapshot(tmp_path) -> None:
     pipeline = GenerationPipeline(
+        settings=Settings(artifact_storage_path=tmp_path),
         planner=SuccessfulPlanner(),
         renderers=RendererRegistryStub(FailingRenderer()),
     )
@@ -123,10 +135,15 @@ def test_generation_pipeline_returns_rendering_failure_with_planning_snapshot() 
     assert result.technical_message == "disk is not writable"
     assert result.planning is not None
     assert result.planning.artifact_plan.title == "План встречи"
+    assert result.planning.document_spec_path is not None
 
 
-def test_generation_pipeline_reports_unsupported_renderer_format() -> None:
-    pipeline = GenerationPipeline(planner=PptxPlanner())
+def test_generation_pipeline_reports_unsupported_renderer_format(tmp_path) -> None:
+    pipeline = GenerationPipeline(
+        settings=Settings(artifact_storage_path=tmp_path),
+        planner=PptxPlanner(),
+        renderers=ExplodingRendererRegistry(),
+    )
 
     result = pipeline.run(
         "art_123",
@@ -134,6 +151,9 @@ def test_generation_pipeline_reports_unsupported_renderer_format() -> None:
     )
 
     assert isinstance(result, PipelineFailure)
-    assert result.stage == "rendering"
+    assert result.stage == "format_validation"
     assert result.user_message == "Формат 'pptx' пока не поддерживается"
     assert "Renderer for 'pptx' is not configured." in result.technical_message
+    assert "Renderer for 'pptx' is not configured." in result.warnings
+    assert result.planning is not None
+    assert result.planning.document_spec_path is not None

@@ -33,6 +33,10 @@ class GenerationRequest(Base):
         back_populates="request",
         cascade="all, delete-orphan",
     )
+    jobs: Mapped[list["DocumentJob"]] = relationship(
+        back_populates="request",
+        cascade="all, delete-orphan",
+    )
 
 
 class Artifact(Base):
@@ -61,6 +65,40 @@ class Artifact(Base):
     )
 
     request: Mapped[GenerationRequest] = relationship(back_populates="artifacts")
+    job: Mapped["DocumentJob | None"] = relationship(back_populates="artifact", uselist=False)
+
+
+class DocumentJob(Base):
+    __tablename__ = "document_jobs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("job"))
+    request_id: Mapped[str] = mapped_column(
+        ForeignKey("generation_requests.id"),
+        nullable=False,
+        index=True,
+    )
+    artifact_id: Mapped[str] = mapped_column(
+        ForeignKey("artifacts.id"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    current_stage: Mapped[str] = mapped_column(String(64), nullable=False, default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    request: Mapped[GenerationRequest] = relationship(back_populates="jobs")
+    artifact: Mapped[Artifact] = relationship(back_populates="job")
 
 
 class LLMGeneration(Base):

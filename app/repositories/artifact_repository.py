@@ -7,15 +7,21 @@ class ArtifactRepository:
     def __init__(self, db_session: Session) -> None:
         self.db_session = db_session
 
-    def create_processing(self, request_id: str, output_format: str, title: str | None) -> Artifact:
+    def create_queued(self, request_id: str, output_format: str, title: str | None) -> Artifact:
         artifact = Artifact(
             request_id=request_id,
             output_format=output_format,
-            status="processing",
+            status="queued",
             title=title,
             warnings=[],
         )
         self.db_session.add(artifact)
+        self.db_session.flush()
+        return artifact
+
+    def mark_processing(self, artifact: Artifact) -> Artifact:
+        artifact.status = "processing"
+        artifact.error_message = None
         self.db_session.flush()
         return artifact
 

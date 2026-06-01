@@ -55,6 +55,47 @@ Stage 6 prepares the format seam:
 - renderer registry tests;
 - future renderer notes in `docs/future-renderers.md`.
 
+Stage 7 adds an internal test UI:
+
+- `GET /ui`;
+- prompt form;
+- optional overrides JSON;
+- optional API token field;
+- status, warnings, errors, and download button.
+
+Stage 8 adds a test deployment path:
+
+- Dockerfile;
+- docker-compose;
+- server `.env` example;
+- persistent `storage` volume;
+- VDSina deployment guide in `docs/deploy-vdsina.md`.
+
+Stage 9 switches generation to a job-based async backend:
+
+- `POST /documents` creates a request, artifact, and job, then returns `202 Accepted`;
+- generation runs in a worker that reuses the existing `GenerationPipeline`;
+- `GET /documents/{document_id}` returns `queued`, `processing`, `ready`, or `failed`;
+- responses include `job_id`, `current_stage`, `status_url`, and `download_url` when ready;
+- `WORKER_CONCURRENCY` controls worker parallelism;
+- processing jobs are requeued on worker startup.
+
+Stage 10 adds the document specification contract:
+
+- `DocumentSpec` / `document_spec.json` as the stable intermediate document contract;
+- `content_markdown` for full document content;
+- planning diagnostics now include `document_spec`;
+- every planned job saves `{document_id}.document_spec.json` next to the generated artifact;
+- the current `.docx` renderer can render from `DocumentSpec` while future codegen/sandbox work is prepared.
+
+Stage 11 adds LLM codegen and a Docker sandbox for `.docx`:
+
+- a codegen prompt asks an LLM for Python code;
+- generated code must read `/input/document_spec.json` and write `/output/result.docx`;
+- sandbox execution runs without network and with CPU/RAM/timeout limits;
+- generated code, stdout, stderr, and sandbox result JSON are saved under `storage/artifacts/codegen/{document_id}`;
+- if codegen or sandbox execution fails, the built-in `.docx` renderer is used as fallback.
+
 ## Run Locally
 
 ```powershell
@@ -80,4 +121,34 @@ Invoke-RestMethod `
   -Body '{"prompt":"Сделай краткий документ по итогам встречи"}'
 ```
 
-The response contains `download_url` when the `.docx` file is ready.
+The response is accepted immediately with `status_url`. Poll that URL until the status becomes `ready` or `failed`. A ready document contains `download_url`.
+
+Run the standalone worker when `WORKER_ENABLED=false` for the API process:
+
+```powershell
+python -m app.worker
+```
+
+Build the `.docx` sandbox runtime image before enabling codegen:
+
+```powershell
+docker build -f sandbox/docx-runtime/Dockerfile -t text-to-doc-builder-docx-runtime:local sandbox/docx-runtime
+```
+
+With Docker Compose:
+
+```powershell
+docker compose --profile runtime build docx-runtime
+docker compose build --no-cache
+docker compose up -d
+```
+
+Open the test UI:
+
+```powershell
+Start-Process http://localhost:8000/ui
+```
+
+## Test Deploy
+
+See [docs/deploy-vdsina.md](docs/deploy-vdsina.md).

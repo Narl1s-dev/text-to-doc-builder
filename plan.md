@@ -2,295 +2,56 @@
 
 ## 1. Идея продукта
 
-Проект принимает API-запрос в свободной, разговорной форме и сразу создает документ. Прототип сфокусирован на `.docx`, но архитектура должна быть готова к будущему расширению на другие форматы: `.pptx`, `.xlsx`, `.pdf` и другие.
+Text To Doc Builder - backend-сервис, который принимает API-запрос в свободной разговорной форме, понимает требования пользователя и создает файл документа.
 
-Базовый сценарий:
+Прототип сфокусирован на `.docx`, но архитектура должна быть готова к будущим форматам: `.pptx`, `.xlsx`, `.pdf`, `.html` и другим.
 
-1. Внешний клиент отправляет `POST /documents` с текстом запроса.
-2. Backend валидирует запрос.
-3. Backend сохраняет исходные данные и метаданные.
-4. Backend отправляет пользовательский запрос в LLM через OpenRouter.
-5. LLM разбирает свободный текст, извлекает ограничения и дополняет недостающие параметры стандартными значениями.
-6. Backend получает структурированный план генерации.
-7. Backend выбирает генератор под нужный формат.
-8. Для прототипа backend создает `.docx`.
-9. Backend сохраняет файл и возвращает ссылку на скачивание.
+Главная рекомендация по целевой архитектуре: не делать просто долгий async endpoint. Сервис должен быть job-based:
 
-Главный принцип: пользователь может писать естественным языком, а сервис сам переводит запрос в структурированную спецификацию документа.
+1. Клиент отправляет `POST /documents`.
+2. Backend быстро валидирует запрос, создает job и возвращает `202 Accepted` с `document_id`.
+3. Генерация идет в фоне через worker.
+4. Клиент проверяет статус через `GET /documents/{document_id}`.
+5. Когда файл готов, клиент скачивает его через `GET /documents/{document_id}/download`.
+
+Так API остается быстрым, долгие LLM-вызовы и генерация файлов не блокируют HTTP-запрос, а ошибки можно надежно сохранять и диагностировать.
 
 ## 2. Целевой результат
 
-В итоге мы хотим получить backend-сервис, который умеет:
+В итоге нужен backend-сервис, который умеет:
 
 - принимать REST API-запросы на создание документов;
-- на первом этапе создавать `.docx`;
-- не быть архитектурно привязанным только к `.docx`;
+- возвращать `202 Accepted` сразу после создания job;
+- хранить статус генерации в базе данных;
+- выполнять генерацию в фоне через worker-пул;
+- ограничивать параллельность генерации, например 2-4 одновременные задачи;
 - разбирать свободный пользовательский запрос через LLM;
-- использовать базовые значения, если пользователь не указал стиль, язык, структуру, объем или форматирование;
-- обращаться к OpenRouter для генерации, структурирования или улучшения содержимого;
-- хранить исходный запрос, структурированную спецификацию, ответ LLM и готовый файл;
-- возвращать клиенту результат: статус, имя файла и ссылку на скачивание;
-- позже подключать генераторы `.pptx`, `.xlsx`, `.pdf` и других форматов без переписывания API.
+- применять стандартные значения, если пользователь не указал стиль, язык, структуру, объем или форматирование;
+- создавать для `.docx` структурированный `document_spec.json`;
+- хранить внутри спецификации `content_markdown`, если текст удобнее вести в Markdown;
+- генерировать Python-код для создания `.docx` через отдельный codegen LLM-шаг;
+- запускать LLM-generated code только в Docker sandbox;
+- валидировать готовый `.docx`;
+- делать 1-2 repair retry при ошибке кода или валидации;
+- сохранять исходный запрос, спецификацию, LLM-ответы, sandbox-логи и готовый файл;
+- отдавать клиенту статус, ошибку или ссылку на скачивание;
+- иметь минимальный web UI для быстрого ручного тестирования сервиса;
+- разворачиваться на своем сервере в тестовом окружении;
+- позже подключать `.pptx`, `.xlsx`, `.pdf` и другие форматы без переписывания API.
 
-## 3. Подход к форматам
+## 3. API-модель
 
-Прототип делает только `.docx`, но ядро проекта должно работать не с конкретным Word-файлом, а с абстрактной спецификацией результата.
-
-Для этого вводим два уровня:
-
-1. `GenerationSpec` - что хочет пользователь и какие ограничения нужно применить.
-2. `ArtifactPlan` - структурированный план конкретного артефакта, который можно отдать генератору.
-
-Для `.docx` `ArtifactPlan` будет похож на план документа. Для `.pptx` это будет план презентации со слайдами. Для `.xlsx` - план книги с листами, таблицами и формулами. Для `.pdf` возможны два пути: прямой PDF-генератор или промежуточный HTML/CSS с последующей конвертацией.
-
-## 4. Предлагаемый стек
-
-Стартовый стек:
-
-- Язык: Python.
-- API: FastAPI.
-- Валидация данных: Pydantic.
-- База данных: SQLite для прототипа, PostgreSQL для production.
-- ORM/миграции: SQLAlchemy + Alembic.
-- HTTP-клиент для OpenRouter: httpx.
-- Генерация `.docx`: python-docx.
-- Хранилище файлов: локальная папка `storage/artifacts` для прототипа.
-- Тесты: pytest.
-
-Кандидаты для будущих форматов:
-
-- `.pptx`: python-pptx.
-- `.xlsx`: openpyxl или XlsxWriter.
-- `.pdf`: HTML/CSS -> PDF через WeasyPrint или другой HTML-to-PDF renderer.
-- `.html`: Jinja2-шаблоны + HTML sanitizer, если понадобится отдавать HTML как самостоятельный формат.
-
-Важно: LLM может помогать создавать структуру, текст, таблицы, HTML или JSON-план, но финальную сборку файла должен выполнять backend. Так результат будет валидируемым, повторяемым и контролируемым.
-
-## 5. Архитектура
-
-```text
-External Client
-      |
-      v
-Backend API
-      |
-      v
-Generation Pipeline
-      |
-      +--> Request Persistence
-      +--> LLM Request Parser
-      +--> Defaults Resolver
-      +--> OpenRouter Client
-      +--> Artifact Planning
-      +--> Format Renderer Registry
-      |       |
-      |       +--> DOCX Renderer
-      |       +--> Future PPTX Renderer
-      |       +--> Future XLSX Renderer
-      |       +--> Future PDF Renderer
-      |
-      +--> File Storage
-      |
-      v
-Artifact Result
-```
-
-## 6. Основной pipeline генерации
-
-### 6.1 Прием запроса
-
-Backend получает от клиента:
-
-- свободный текст запроса;
-- желаемый формат, если клиент указал его явно;
-- дополнительные структурированные параметры, если они есть;
-- технические метаданные клиента.
-
-Минимальный запрос может состоять только из поля `prompt`.
-
-### 6.2 LLM-разбор ограничений
-
-Разбор ограничений сразу делаем через LLM. Пользователь будет писать в разговорной форме, поэтому простые правила подходят только как вспомогательная валидация, а не как основной механизм.
-
-Задача `LLMRequestParser`:
-
-- понять, какой тип документа нужен;
-- определить формат результата;
-- извлечь тему, цель, аудиторию, стиль, язык, объем и структуру;
-- выделить исходные факты, которые нельзя искажать;
-- определить, нужно ли дописать текст, переформулировать его или только оформить;
-- вернуть структурированный JSON;
-- заполнить недостающие поля стандартными значениями.
-
-Примеры пользовательских запросов:
-
-```text
-Сделай служебную записку на 1 страницу по этому тексту, официальным стилем.
-```
-
-```text
-Подготовь документ с планом урока. Нужны цель, материалы, ход занятия и домашнее задание.
-```
-
-```text
-Собери краткий договор в деловом стиле, без сложных юридических формулировок.
-```
-
-### 6.3 Базовые значения и плейсхолдеры
-
-Если пользователь не указал часть параметров, сервис должен подставить стандартные значения. Это должно происходить явно и сохраняться в `GenerationSpec`.
-
-Базовые значения для прототипа:
-
-```json
-{
-  "output_format": "docx",
-  "language": "ru",
-  "document_type": "general_document",
-  "title": "Документ",
-  "audience": "general",
-  "tone": "neutral",
-  "style": "business",
-  "length": {
-    "mode": "medium",
-    "max_pages": null
-  },
-  "formatting": {
-    "page_size": "A4",
-    "orientation": "portrait",
-    "font_family": "Times New Roman",
-    "font_size": 12,
-    "line_spacing": 1.15,
-    "paragraph_spacing_after": 6,
-    "margins": {
-      "top_cm": 2,
-      "right_cm": 1.5,
-      "bottom_cm": 2,
-      "left_cm": 3
-    }
-  },
-  "structure": {
-    "include_title": true,
-    "include_summary": false,
-    "sections": []
-  }
-}
-```
-
-Плейсхолдеры нужны не только как значения по умолчанию, но и как защита от неполных запросов. Например, если пользователь не указал название, LLM может сгенерировать его из темы. Если тема тоже неясна, используется `"Документ"` и сохраняется предупреждение в метаданных.
-
-### 6.4 GenerationSpec
-
-`GenerationSpec` - нормализованное описание того, что нужно создать.
-
-Пример:
-
-```json
-{
-  "output_format": "docx",
-  "document_type": "memo",
-  "title": "Служебная записка",
-  "language": "ru",
-  "audience": "руководитель проекта",
-  "tone": "formal",
-  "style": "official",
-  "source_facts": [
-    "Срок проекта нужно перенести на две недели",
-    "Причина: задержка поставки материалов"
-  ],
-  "constraints": {
-    "max_pages": 1,
-    "must_include": ["причина", "предложение", "ожидаемый результат"],
-    "must_not_include": []
-  },
-  "formatting": {
-    "page_size": "A4",
-    "font_family": "Times New Roman",
-    "font_size": 12
-  }
-}
-```
-
-### 6.5 ArtifactPlan
-
-`ArtifactPlan` - план конкретного файла, который получает renderer.
-
-Для `.docx`:
-
-```json
-{
-  "artifact_type": "document",
-  "output_format": "docx",
-  "title": "Служебная записка",
-  "blocks": [
-    { "type": "heading", "level": 1, "text": "Служебная записка" },
-    { "type": "paragraph", "text": "Прошу перенести срок..." },
-    {
-      "type": "bullet_list",
-      "items": ["Причина переноса", "Предлагаемый срок", "Ожидаемый результат"]
-    }
-  ],
-  "formatting": {
-    "page_size": "A4",
-    "font_family": "Times New Roman",
-    "font_size": 12
-  }
-}
-```
-
-В будущем для `.pptx` и `.xlsx` будут отдельные варианты `ArtifactPlan`, но общий pipeline останется тем же.
-
-### 6.6 Обращение к OpenRouter
-
-OpenRouter используется в двух логических шагах:
-
-1. `LLMRequestParser` - превращает свободный пользовательский запрос в `GenerationSpec`.
-2. `LLMArtifactPlanner` - превращает `GenerationSpec` в `ArtifactPlan`.
-
-На первом этапе эти два шага можно объединить в один вызов OpenRouter, чтобы быстрее собрать прототип. Но интерфейсы лучше сразу разделить, чтобы позже можно было независимо менять парсинг запроса и построение документа.
-
-Компоненты:
-
-- `OpenRouterClient` - низкоуровневый HTTP-клиент.
-- `PromptBuilder` - сборка промптов.
-- `LLMRequestParser` - парсинг пользовательского запроса.
-- `DefaultsResolver` - применение стандартных значений.
-- `LLMArtifactPlanner` - построение плана артефакта.
-- `LLMResponseValidator` - проверка JSON и схемы.
-
-### 6.7 Генерация файла
-
-Финальную генерацию выполняет renderer, выбранный по `output_format`.
-
-Для прототипа:
-
-- `DocxRenderer` получает `ArtifactPlan`;
-- создает `.docx` через python-docx;
-- сохраняет файл в `storage/artifacts`;
-- возвращает путь, имя файла и размер.
-
-Будущие renderer-ы:
-
-- `PptxRenderer`;
-- `XlsxRenderer`;
-- `PdfRenderer`;
-- `HtmlRenderer`.
-
-## 7. API первого прототипа
-
-### Создать документ
+### Создать задачу генерации
 
 `POST /documents`
 
-Request:
+Запрос:
 
 ```json
 {
-  "prompt": "Сделай служебную записку на 1 страницу официальным стилем. Тема: перенос сроков проекта из-за задержки поставки материалов.",
-  "output_format": "docx",
+  "prompt": "Сделай коммерческое предложение для клиента. Деловой стиль, 2 страницы, добавь таблицу цен.",
   "overrides": {
-    "language": "ru",
-    "title": "Служебная записка"
+    "language": "ru"
   },
   "metadata": {
     "client": "prototype",
@@ -299,7 +60,7 @@ Request:
 }
 ```
 
-Минимальный request:
+Минимальный запрос:
 
 ```json
 {
@@ -307,57 +68,93 @@ Request:
 }
 ```
 
-Response при успешной генерации:
+Ответ должен быть быстрым. `POST /documents` не ждет генерацию файла.
+
+```json
+{
+  "document_id": "doc_123",
+  "request_id": "req_123",
+  "status": "queued",
+  "output_format": "docx",
+  "status_url": "/documents/doc_123",
+  "download_url": null
+}
+```
+
+HTTP-статус: `202 Accepted`.
+
+### Получить статус
+
+`GET /documents/{document_id}`
+
+Пока задача в очереди:
+
+```json
+{
+  "document_id": "doc_123",
+  "status": "queued",
+  "output_format": "docx",
+  "file_name": null,
+  "download_url": null,
+  "error_message": null,
+  "warnings": []
+}
+```
+
+Пока задача выполняется:
+
+```json
+{
+  "document_id": "doc_123",
+  "status": "processing",
+  "output_format": "docx",
+  "current_stage": "codegen",
+  "file_name": null,
+  "download_url": null,
+  "error_message": null,
+  "warnings": []
+}
+```
+
+Когда файл готов:
 
 ```json
 {
   "document_id": "doc_123",
   "status": "ready",
   "output_format": "docx",
-  "file_name": "document_doc_123.docx",
+  "file_name": "doc_123.docx",
   "download_url": "/documents/doc_123/download",
+  "error_message": null,
   "warnings": []
 }
 ```
 
-Response при ошибке:
+При ошибке:
 
 ```json
 {
   "document_id": "doc_123",
   "status": "failed",
-  "error_message": "Не удалось создать документ"
+  "output_format": "docx",
+  "file_name": null,
+  "download_url": null,
+  "error_message": "Не удалось создать документ",
+  "warnings": ["Sandbox execution failed after 2 repair attempts."]
 }
 ```
 
-### Скачать документ
+### Скачать готовый файл
 
 `GET /documents/{document_id}/download`
 
-Возвращает готовый файл.
+Если документ готов, endpoint возвращает файл.
 
-### Получить информацию о документе
-
-`GET /documents/{document_id}`
-
-Response:
-
-```json
-{
-  "document_id": "doc_123",
-  "status": "ready",
-  "output_format": "docx",
-  "file_name": "document_doc_123.docx",
-  "download_url": "/documents/doc_123/download",
-  "created_at": "2026-05-25T19:00:00Z"
-}
-```
+Если документ еще не готов, endpoint возвращает понятную ошибку, например `409 Conflict`.
 
 ### Проверка состояния сервиса
 
 `GET /health`
-
-Response:
 
 ```json
 {
@@ -365,7 +162,333 @@ Response:
 }
 ```
 
-## 8. Основные сущности
+## 4. Стек
+
+Для внутреннего MVP достаточно легкой инфраструктуры:
+
+- API: FastAPI.
+- Язык backend: Python.
+- Валидация данных: Pydantic.
+- База данных: SQLite с WAL для MVP.
+- Production DB позже: PostgreSQL.
+- ORM и миграции: SQLAlchemy + Alembic.
+- Очередь: таблица `jobs` в SQLite/PostgreSQL.
+- Worker: простой worker-loop внутри отдельного процесса или отдельного entrypoint.
+- Параллельность: worker-пул с лимитом, например 2-4 одновременные генерации.
+- LLM provider: OpenRouter.
+- Renderer runtime для `.docx`: Python + python-docx внутри Docker image.
+- Sandbox: Docker container.
+- Storage: локальная папка `storage/artifacts`, позже S3/MinIO при необходимости.
+- Минимальный UI: статическая страница или легкий server-rendered шаблон внутри FastAPI.
+- Тестовое развертывание: Docker Compose для API, worker, базы и sandbox runtime.
+- Тесты: pytest.
+
+Kafka, RabbitMQ и Celery для внутреннего MVP не нужны. Их можно рассмотреть позже, если появятся высокая нагрузка, несколько backend-инстансов или сложная маршрутизация задач.
+
+## 5. Архитектура
+
+```text
+External Client / Minimal Test UI
+      |
+      v
+FastAPI Backend
+      |
+      +--> Request Validation
+      +--> GenerationRequest Repository
+      +--> Artifact Repository
+      +--> Job Repository
+      |
+      v
+202 Accepted + document_id
+
+
+Worker Pool
+      |
+      +--> Job Lease / Status Update
+      +--> Generation Pipeline
+      |       |
+      |       +--> Research / Planning LLM
+      |       +--> document_spec.json
+      |       +--> content_markdown
+      |       +--> Codegen LLM
+      |       +--> Docker Sandbox
+      |       +--> DOCX Validator
+      |       +--> Repair Retry
+      |
+      +--> Artifact Storage
+      +--> Final Status Update
+```
+
+Разделение ролей:
+
+- API отвечает за быстрый прием запроса, валидацию, создание job и выдачу статуса.
+- Worker отвечает за долгую генерацию.
+- Pipeline отвечает за шаги генерации.
+- Sandbox отвечает за безопасное исполнение кода.
+- Storage отвечает за сохранение готовых файлов.
+
+Текущий синхронный pipeline остается рабочим прототипом до перехода на job-based backend. После перехода `GenerationService` должен создавать job, а не выполнять генерацию внутри HTTP-запроса.
+
+## 6. Очередь jobs и worker-пул
+
+### Jobs table
+
+Для MVP очередь реализуется таблицей `jobs`.
+
+Базовые поля:
+
+- `id`;
+- `document_id`;
+- `request_id`;
+- `status`;
+- `priority`;
+- `attempts`;
+- `max_attempts`;
+- `locked_by`;
+- `locked_at`;
+- `started_at`;
+- `finished_at`;
+- `last_error`;
+- `created_at`;
+- `updated_at`.
+
+Статусы job:
+
+- `queued` - задача создана и ждет worker;
+- `processing` - worker взял задачу в работу;
+- `ready` - документ успешно создан;
+- `failed` - задача завершилась ошибкой;
+- `canceled` - задача отменена, если позже понадобится отмена.
+
+Внутренний текущий шаг можно хранить отдельно в `current_stage`:
+
+- `planning`;
+- `codegen`;
+- `sandbox_execution`;
+- `validation`;
+- `repair`;
+- `storage`.
+
+### Worker loop
+
+Worker должен:
+
+1. Забрать из БД несколько `queued` задач с учетом лимита параллельности.
+2. Пометить задачу как `processing`.
+3. Запустить generation pipeline.
+4. Обновлять `current_stage`.
+5. На успехе сохранить файл и поставить `ready`.
+6. На ошибке выполнить repair retry, если он допустим.
+7. После исчерпания попыток поставить `failed`.
+
+Параллельность ограничивается настройкой, например:
+
+```text
+WORKER_CONCURRENCY=2
+JOB_MAX_ATTEMPTS=3
+SANDBOX_TIMEOUT_SECONDS=60
+```
+
+Для локального MVP worker может жить в том же процессе через startup task, но предпочтительнее быстро прийти к отдельному процессу:
+
+```text
+python -m app.worker
+```
+
+Так API и генерация будут разделены яснее.
+
+### Восстановление зависших задач
+
+На старте сервиса или worker нужно подбирать зависшие задачи:
+
+- если job находится в `processing`, но `locked_at` слишком старый, считать ее зависшей;
+- если попытки еще остались, вернуть ее в `queued`;
+- если попытки исчерпаны, перевести в `failed`;
+- сохранить предупреждение или `last_error`, чтобы было понятно, почему задача была восстановлена.
+
+Это защищает от падения процесса посреди генерации.
+
+## 7. Pipeline генерации
+
+Целевой pipeline:
+
+```text
+User Prompt
+    |
+    v
+Research / Planning LLM
+    |
+    v
+document_spec.json + content_markdown
+    |
+    v
+Codegen LLM
+    |
+    v
+Python script for python-docx
+    |
+    v
+Docker Sandbox
+    |
+    v
+/output/result.docx
+    |
+    v
+DOCX Validator
+    |
+    +--> ready
+    |
+    +--> repair retry -> Codegen LLM -> Sandbox -> Validator
+    |
+    +--> failed
+```
+
+### Research / planning LLM
+
+На этом шаге модель:
+
+- разбирает свободный запрос пользователя;
+- определяет формат результата;
+- извлекает ограничения;
+- дополняет недостающие поля стандартными значениями;
+- при необходимости делает research, если выбранная модель и провайдер дают internet access;
+- формирует `document_spec.json`;
+- готовит `content_markdown`, если контент удобнее описывать Markdown.
+
+Для простых задач можно использовать более дешевую и быструю модель.
+
+### Document spec
+
+`document_spec.json` - главный контракт между planning и codegen.
+
+Пример:
+
+```json
+{
+  "title": "Коммерческое предложение",
+  "language": "ru",
+  "document_type": "proposal",
+  "style": "business",
+  "output_format": "docx",
+  "formatting": {
+    "page_size": "A4",
+    "font": "Times New Roman",
+    "font_size": 12
+  },
+  "content_markdown": "# Заголовок\n\nТекст...",
+  "requirements": [
+    "Добавить таблицу цен",
+    "Добавить блок с контактами"
+  ]
+}
+```
+
+JSON лучше использовать для структуры: секции, таблицы, требования, формат, стиль, ограничения.
+
+Markdown лучше использовать для текстового содержания: заголовки, абзацы, списки, черновой текст.
+
+Оптимальная схема для MVP: сначала строим `document_spec.json`, а внутри него храним `content_markdown`.
+
+### Codegen LLM
+
+На этом шаге модель пишет Python-код под `python-docx`.
+
+Для codegen лучше использовать более сильную модель, потому что стабильность важнее экономии. Долгий thinking не обязателен. Важнее дать четкую инструкцию, короткие примеры кода и строгий контракт:
+
+```text
+Создай файл /output/result.docx.
+Не читай env.
+Не используй network.
+Работай только с файлами из /input и /output.
+Если нужны данные, бери их из /input/document_spec.json.
+```
+
+Codegen prompt должен требовать только код, без пояснений вокруг.
+
+### Repair retry
+
+Если код упал или validator не принял файл, запускается repair prompt.
+
+В repair prompt передается:
+
+- исходный `document_spec.json`;
+- предыдущий Python-код;
+- traceback;
+- ошибки validator-а;
+- жесткое требование исправить только код.
+
+Количество repair-попыток ограничивается, например 1-2.
+
+## 8. Sandbox
+
+Код от LLM нельзя запускать на сервере напрямую.
+
+Исполнение должно происходить только внутри Docker container.
+
+Требования к sandbox:
+
+- без доступа к env и secrets backend-а;
+- желательно без network на этапе исполнения кода;
+- ограничить CPU;
+- ограничить RAM;
+- ограничить timeout;
+- монтировать только `/input` и `/output`;
+- `/input` доступен только для чтения;
+- `/output` доступен для записи;
+- после выполнения проверять, что появился `/output/result.docx`;
+- не принимать от контейнера произвольные пути к файлам.
+
+Минимальный runtime container для `.docx`:
+
+- Python;
+- python-docx;
+- только нужные системные зависимости;
+- entrypoint, который запускает сгенерированный скрипт.
+
+Важно: OpenRouter API key и другие secrets не должны попадать внутрь sandbox-контейнера.
+
+## 9. Валидация `.docx`
+
+Validator должен проверять:
+
+- файл существует;
+- файл не пустой;
+- расширение `.docx`;
+- файл открывается через `python-docx`;
+- в документе есть хотя бы один параграф или таблица;
+- размер файла находится в разумных пределах;
+- при необходимости: базовые свойства страницы, шрифты, наличие обязательных секций.
+
+Если validator находит проблему, pipeline запускает repair retry или переводит job в `failed`.
+
+## 10. Подход к форматам
+
+Прототип создает `.docx`, но ядро проекта должно работать с абстрактной спецификацией результата.
+
+Уровни описания:
+
+1. `GenerationSpec` - что хочет пользователь и какие ограничения нужно применить.
+2. `DocumentSpec` - нормализованный JSON-контракт для конкретной генерации.
+3. `content_markdown` - текстовое содержимое внутри `DocumentSpec`.
+4. `Artifact` - итоговый файл и его metadata.
+
+Для будущих форматов:
+
+- `.pptx`: `presentation_spec.json`, возможно images/research assets, runtime с python-pptx;
+- `.xlsx`: `workbook_spec.json`, runtime с openpyxl или XlsxWriter;
+- `.pdf`: HTML/CSS spec -> PDF renderer или отдельный PDF runtime;
+- `.html`: Jinja2 templates + sanitizer.
+
+Для форматов с изображениями понадобится отдельный asset pipeline:
+
+- image search или image generation;
+- сохранение источника и лицензии, если используется внешний поиск;
+- скачивание/нормализация картинок;
+- проверка размера и формата;
+- передача изображений в sandbox через `/input/assets`;
+- запрет sandbox-у самому ходить в интернет.
+
+## 11. Основные сущности
 
 ### GenerationRequest
 
@@ -380,6 +503,28 @@ Response:
 - `metadata`;
 - `created_at`.
 
+### DocumentJob
+
+Хранит задачу фоновой генерации.
+
+Поля:
+
+- `id`;
+- `document_id`;
+- `request_id`;
+- `status`;
+- `current_stage`;
+- `priority`;
+- `attempts`;
+- `max_attempts`;
+- `locked_by`;
+- `locked_at`;
+- `started_at`;
+- `finished_at`;
+- `last_error`;
+- `created_at`;
+- `updated_at`.
+
 ### Artifact
 
 Хранит результат генерации.
@@ -388,6 +533,7 @@ Response:
 
 - `id`;
 - `request_id`;
+- `job_id`;
 - `output_format`;
 - `status`;
 - `title`;
@@ -407,6 +553,7 @@ Response:
 
 - `id`;
 - `request_id`;
+- `job_id`;
 - `stage`;
 - `provider`;
 - `model`;
@@ -417,93 +564,24 @@ Response:
 - `error_message`;
 - `created_at`.
 
-### Template
+### SandboxRun
 
-Описывает шаблон оформления.
+Хранит результат запуска Docker sandbox.
 
 Поля:
 
 - `id`;
-- `name`;
-- `artifact_type`;
-- `output_format`;
-- `description`;
-- `settings`;
-- `created_at`;
-- `updated_at`.
+- `job_id`;
+- `attempt`;
+- `image`;
+- `command`;
+- `exit_code`;
+- `stdout`;
+- `stderr`;
+- `timeout`;
+- `created_at`.
 
-## 9. Статусы
-
-В прототипе генерация запускается сразу, поэтому основные статусы такие:
-
-- `processing` - файл создается;
-- `ready` - файл готов;
-- `failed` - генерация завершилась ошибкой.
-
-Статус `pending` понадобится позже, если появится очередь задач.
-
-## 10. Предварительная структура проекта
-
-```text
-text-to-doc-builder/
-  app/
-    main.py
-    api/
-      routes/
-        health.py
-        documents.py
-    core/
-      config.py
-      logging.py
-      errors.py
-    db/
-      session.py
-      models.py
-      migrations/
-    schemas/
-      generation_request.py
-      generation_spec.py
-      artifact.py
-      artifact_plan.py
-    services/
-      generation_service.py
-      generation_pipeline.py
-      defaults_resolver.py
-      prompt_builder.py
-      storage_service.py
-    llm/
-      openrouter_client.py
-      request_parser.py
-      artifact_planner.py
-      response_validator.py
-      schemas.py
-    renderers/
-      base.py
-      registry.py
-      docx_renderer.py
-      future_pptx_renderer.py
-      future_xlsx_renderer.py
-      future_pdf_renderer.py
-    repositories/
-      generation_request_repository.py
-      artifact_repository.py
-      llm_generation_repository.py
-      template_repository.py
-  storage/
-    artifacts/
-  tests/
-    unit/
-    integration/
-  alembic/
-  .env.example
-  pyproject.toml
-  README.md
-  plan.md
-```
-
-В прототипе реализуем только `docx_renderer.py`. Файлы `future_*` в структуре показывают направление развития, но создавать пустые модули без пользы не обязательно.
-
-## 11. Конфигурация окружения
+## 12. Конфигурация окружения
 
 Минимальный `.env.example`:
 
@@ -513,11 +591,15 @@ APP_HOST=0.0.0.0
 APP_PORT=8000
 
 DATABASE_URL=sqlite:///./storage/app.db
+SQLITE_WAL_ENABLED=true
+
 ARTIFACT_STORAGE_PATH=./storage/artifacts
 
 OPENROUTER_API_KEY=
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-OPENROUTER_MODEL=
+OPENROUTER_PLANNING_MODEL=
+OPENROUTER_CODEGEN_MODEL=
+OPENROUTER_REPAIR_MODEL=
 OPENROUTER_TIMEOUT_SECONDS=60
 
 DEFAULT_OUTPUT_FORMAT=docx
@@ -527,126 +609,341 @@ DEFAULT_TONE=neutral
 DEFAULT_FONT_FAMILY=Times New Roman
 DEFAULT_FONT_SIZE=12
 
+WORKER_CONCURRENCY=2
+JOB_MAX_ATTEMPTS=3
+JOB_STALE_AFTER_SECONDS=900
+
+SANDBOX_DOCKER_IMAGE=text-to-doc-docx-runtime:local
+SANDBOX_NETWORK=none
+SANDBOX_TIMEOUT_SECONDS=60
+SANDBOX_MEMORY_LIMIT=512m
+SANDBOX_CPU_LIMIT=1
+
 PUBLIC_BASE_URL=http://localhost:8000
 API_INTERNAL_TOKEN=
+TEST_UI_ENABLED=true
+TEST_UI_REQUIRE_TOKEN=true
 ```
 
-`API_INTERNAL_TOKEN` нужен для защиты API от случайных или чужих вызовов. На этапе локального прототипа его можно сделать опциональным, но лучше сразу заложить поддержку.
+## 13. Тестовое развертывание и минимальный UI
 
-## 12. Работа с OpenRouter
+Для ручной проверки сервиса нужен минималистичный UI на своем сервере. Это не продуктовый frontend, а внутренняя тестовая панель.
 
-Для прототипа OpenRouter можно вызвать один раз и попросить модель вернуть сразу `GenerationSpec` и `ArtifactPlan`.
+Задачи UI:
 
-Требования к ответу LLM:
+- отправить `POST /documents`;
+- показать `document_id`;
+- автоматически опрашивать `GET /documents/{document_id}`;
+- показывать статусы `queued`, `processing`, `ready`, `failed`;
+- показывать текущий этап, если backend его отдает;
+- показать ошибку и warnings;
+- дать кнопку скачивания, когда появился `download_url`.
 
-- строго валидный JSON;
-- никаких markdown-блоков вокруг JSON;
-- заполненные значения по умолчанию;
-- явное поле `warnings`, если часть данных пришлось предположить;
-- сохранение фактов пользователя без искажений;
-- структура, пригодная для renderer-а.
+Минимальный экран:
 
-Пример верхнего уровня ответа:
+- textarea для `prompt`;
+- необязательное поле для `overrides` в JSON;
+- кнопка создания документа;
+- блок статуса;
+- блок ошибок;
+- кнопка скачивания готового файла.
 
-```json
-{
-  "generation_spec": {
-    "output_format": "docx",
-    "document_type": "memo",
-    "title": "Служебная записка"
-  },
-  "artifact_plan": {
-    "artifact_type": "document",
-    "output_format": "docx",
-    "title": "Служебная записка",
-    "blocks": []
-  },
-  "warnings": []
-}
+UI не должен становиться обязательным клиентом. Основной контракт сервиса остается REST API.
+
+Варианты реализации:
+
+- самый простой: `GET /ui` отдает статический HTML + vanilla JS;
+- чуть аккуратнее: папка `app/static` и `app/templates`;
+- позже при необходимости: отдельный frontend-проект.
+
+Для текущего проекта лучше начать с `GET /ui`, потому что это быстрее для тестирования и не добавляет лишний frontend-стек.
+
+Тестовое развертывание на своем сервере:
+
+- API запускается как отдельный процесс/container;
+- worker запускается как отдельный процесс/container;
+- SQLite можно оставить для MVP, но включить WAL;
+- `storage/artifacts` должен быть persistent volume;
+- sandbox runtime должен запускаться через Docker;
+- UI доступен только для внутреннего использования;
+- доступ к API/UI лучше закрыть внутренним токеном или basic auth на уровне reverse proxy.
+
+Минимальная схема:
+
+```text
+Browser
+   |
+   v
+Minimal Test UI
+   |
+   v
+FastAPI API
+   |
+   +--> SQLite / Postgres
+   +--> storage/artifacts
+   +--> Worker
+           |
+           +--> OpenRouter
+           +--> Docker Sandbox
 ```
 
-После получения ответа backend обязательно валидирует JSON через Pydantic. Если JSON невалидный, допускается одна LLM-попытка исправления.
+## 14. Этапы разработки
 
-## 13. Этапы разработки
+### Этап 1. Каркас backend - выполнено
 
-### Этап 1. Каркас backend
+Уже есть в коде:
 
-- Создать FastAPI-приложение.
-- Добавить `GET /health`.
-- Добавить конфигурацию через `.env`.
-- Подготовить структуру папок.
-- Добавить базовое логирование.
+- FastAPI-приложение;
+- общий API router;
+- `GET /`;
+- `GET /health`;
+- конфигурация через `.env`;
+- базовое логирование;
+- структура `app/api`, `app/core`, `app/db`, `app/schemas`, `app/services`, `app/llm`, `app/renderers`, `app/repositories`;
+- unit-тесты для health endpoints.
 
-### Этап 2. Endpoint создания документа
+### Этап 2. Синхронный API создания документа - выполнено
 
-- Добавить `POST /documents`.
-- Добавить Pydantic-схемы запроса и ответа.
-- Добавить авторизацию через внутренний токен.
-- Сохранять входной запрос в SQLite.
-- Создавать запись artifact со статусом `processing`.
+Уже есть в коде:
 
-### Этап 3. LLM-парсинг и дефолты
+- `POST /documents`;
+- `GET /documents/{document_id}`;
+- `GET /documents/{document_id}/download`;
+- Pydantic-схемы запроса и ответа;
+- optional internal token dependency;
+- сохранение входного запроса в SQLite;
+- создание artifact;
+- статусы `processing`, `ready`, `failed`;
+- понятная ошибка `409 Conflict`, если файл еще не готов к скачиванию.
 
-- Добавить схемы `GenerationSpec` и `ArtifactPlan`.
-- Реализовать `DefaultsResolver`.
-- Реализовать `PromptBuilder`.
-- Реализовать `OpenRouterClient`.
-- Реализовать `LLMRequestParser` и `LLMArtifactPlanner`.
-- Добавить валидацию ответа LLM.
+Текущий контракт: `POST /documents` пока синхронно выполняет генерацию и возвращает `201 Created`.
 
-### Этап 4. Генерация `.docx`
+### Этап 3. LLM-парсинг, дефолты и OpenRouter - выполнено
 
-- Реализовать `RendererRegistry`.
-- Реализовать `DocxRenderer`.
-- Сохранять документы в `storage/artifacts`.
-- Добавить `GET /documents/{document_id}/download`.
-- Обновлять статус artifact на `ready` или `failed`.
+Уже есть в коде:
 
-### Этап 5. Сквозной прототип
+- `GenerationSpec`;
+- `ArtifactPlan`;
+- `DefaultsResolver`;
+- `PromptBuilder`;
+- `OpenRouterClient`;
+- `LLMRequestParser`;
+- `LLMArtifactPlanner`;
+- `LLMResponseValidator`;
+- fallback-планирование при проблемах LLM;
+- сохранение LLM-вызовов;
+- автоматическое определение будущего формата из свободного prompt, например `pptx` для запроса "сделай презентацию".
 
-- Один запрос `POST /documents` должен создавать готовый `.docx`.
-- Проверить минимальный запрос только с `prompt`.
-- Проверить запрос с `overrides`.
-- Проверить ошибки OpenRouter.
-- Проверить ошибки генерации файла.
-- Добавить тесты на pipeline.
+### Этап 4. Генерация `.docx` - выполнено
 
-### Этап 6. Подготовка к новым форматам
+Уже есть в коде:
 
-- Зафиксировать интерфейс `BaseRenderer`.
-- Добавить форматный enum.
-- Добавить валидацию поддерживаемых форматов.
-- Подготовить тесты, которые проверяют выбор renderer-а.
-- Описать будущие `PptxRenderer`, `XlsxRenderer`, `PdfRenderer`.
+- `RendererRegistry`;
+- `BaseRenderer`;
+- `DocxRenderer`;
+- сохранение `.docx` в `storage/artifacts`;
+- download endpoint;
+- обновление artifact на `ready` или `failed`;
+- unit-тесты pipeline и скачивания файла.
 
-### Этап 7. Production-подготовка
+### Этап 5. Сквозной синхронный прототип - выполнено
 
-- Перейти на PostgreSQL.
-- Добавить миграции Alembic.
-- Добавить Dockerfile и docker-compose.
-- Добавить внешнее файловое хранилище при необходимости.
-- Добавить структурированное логирование.
-- Добавить мониторинг ошибок.
-- Добавить очередь задач, если синхронная генерация станет слишком долгой.
+Текущая рабочая baseline-версия:
 
-## 14. Риски и решения
+- клиент отправляет `POST /documents`;
+- backend вызывает OpenRouter или fallback;
+- backend строит план документа;
+- backend создает `.docx`;
+- backend возвращает `document_id`, статус, имя файла и `download_url`;
+- готовый файл можно скачать через `GET /documents/{document_id}/download`.
+
+Этот этап полезен для проверки идеи, но не является целевой архитектурой. Его важно сохранить как стабильную baseline-версию до миграции на jobs.
+
+### Этап 6. Подготовка к новым форматам - выполнено
+
+Уже есть в коде и документации:
+
+- enum форматов: `docx`, `pptx`, `xlsx`, `pdf`, `html`;
+- `SUPPORTED_RENDER_FORMATS`, где сейчас реально поддержан только `docx`;
+- нормализация формата;
+- определение формата из prompt;
+- понятная ошибка для формата, под который еще нет renderer-а;
+- тесты выбора renderer-а;
+- документация по будущим renderer-ам.
+
+### Этап 7. Минимальный UI для ручного тестирования - выполнено
+
+Цель: быстро тестировать текущую baseline-версию без Swagger и curl.
+
+Уже есть в коде:
+
+- `GET /ui`;
+- минимальный HTML + CSS + vanilla JS без отдельного frontend-стека;
+- textarea для `prompt`;
+- необязательное поле `overrides` в JSON;
+- поле `API token` для защищенного API-режима;
+- кнопка отправки запроса;
+- отправка запроса в текущий `POST /documents`;
+- отображение `document_id`, `request_id`, `status`, `output_format`;
+- отображение `warnings` и `error_message`;
+- скачивание готового файла через кнопку с учетом `X-API-Token`;
+- polling-заготовка для будущих статусов `queued` и `processing`;
+- unit-тест на доступность UI.
+
+Важно: UI остается внутренним тестовым инструментом. Основной продуктовый контракт - REST API.
+
+### Этап 8. Тестовое развертывание на своем сервере - выполнено
+
+Цель: получить реальный стенд, где можно проверять генерацию вне локальной машины.
+
+Уже есть в коде:
+
+- `Dockerfile` для API;
+- `.dockerignore`;
+- `docker-compose.yml` для тестового окружения;
+- `.env.server.example`;
+- проброс `.env` без попадания secrets в git;
+- persistent Docker volume для `/app/storage`;
+- SQLite для MVP;
+- инструкция запуска и обновления в `docs/deploy-vdsina.md`;
+- команды проверки `GET /health` и `GET /ui`;
+- рекомендация закрыть UI/API через `API_INTERNAL_TOKEN` или reverse proxy auth.
+
+На этом этапе worker еще не обязателен: можно развернуть текущую синхронную baseline-версию.
+
+### Этап 9. Job-based async backend - выполнено
+
+Цель: перейти от синхронного `POST /documents` к целевой схеме `202 Accepted + status polling`.
+
+Нужно сделать:
+
+- добавить модель `DocumentJob`;
+- добавить repository для jobs;
+- добавить статусы `queued`, `processing`, `ready`, `failed`, `canceled`;
+- добавить `current_stage`;
+- изменить `POST /documents`: создавать request, artifact и job, затем возвращать `202 Accepted`;
+- сохранить внешний `document_id` как главный id для polling и download;
+- перенести запуск текущего `GenerationPipeline` из HTTP-запроса в worker;
+- добавить `app.worker` или отдельный worker entrypoint;
+- ограничить параллельность через `WORKER_CONCURRENCY`;
+- добавить восстановление зависших `processing` jobs на старте;
+- обновить `GET /documents/{document_id}` так, чтобы он показывал статус job и artifact;
+- обновить тесты API под новый контракт.
+
+Ключевой принцип: текущий `GenerationPipeline` не переписывать с нуля, а переиспользовать за worker seam.
+
+### Этап 10. `document_spec.json` и Markdown-контент - выполнено
+
+Цель: подготовить контракт, который позже сможет кормить codegen LLM и разные runtime.
+
+Нужно сделать:
+
+- ввести `DocumentSpec` как отдельную Pydantic-схему;
+- добавить `content_markdown`;
+- отделить `GenerationSpec` от конкретной runtime-спецификации;
+- обновить planning prompt под `document_spec.json`;
+- сохранять spec как диагностируемый JSON;
+- добавить тесты валидации `DocumentSpec`;
+- временно адаптировать `DocxRenderer` так, чтобы он мог строить `.docx` из `DocumentSpec` без Docker/codegen.
+
+### Этап 11. LLM codegen и Docker sandbox для `.docx` - выполнено
+
+Цель: перейти от backend-renderer-а к безопасному исполнению кода, который пишет LLM.
+
+Нужно сделать:
+
+- добавить отдельный codegen prompt;
+- добавить строгий contract: создать `/output/result.docx`;
+- добавить Docker image для `.docx` runtime;
+- запускать LLM-generated Python-код только в sandbox;
+- монтировать `/input` и `/output`;
+- передавать в `/input/document_spec.json`;
+- запретить network и env/secrets внутри sandbox;
+- ограничить CPU, RAM и timeout;
+- проверять появление `/output/result.docx`;
+- сохранять stdout/stderr и exit code.
+
+### Этап 12. Validator и repair retry
+
+Цель: сделать генерацию устойчивой к ошибкам codegen и плохим `.docx`.
+
+Нужно сделать:
+
+- добавить `DocxValidator`;
+- проверять, что `.docx` открывается через `python-docx`;
+- проверять, что документ не пустой;
+- проверять базовые обязательные элементы из `DocumentSpec`;
+- добавить repair prompt;
+- передавать в repair `document_spec.json`, предыдущий код, traceback и ошибки validator-а;
+- ограничить repair 1-2 попытками;
+- после исчерпания попыток переводить job в `failed`.
+
+### Этап 13. Новые форматы и assets
+
+Цель: расширить архитектуру за пределы `.docx`.
+
+Нужно сделать:
+
+- спроектировать `presentation_spec.json` для `.pptx`;
+- спроектировать `workbook_spec.json` для `.xlsx`;
+- спроектировать HTML/CSS pipeline для `.pdf`;
+- добавить asset pipeline для изображений;
+- сохранять источники изображений и metadata;
+- передавать assets в sandbox только через `/input/assets`;
+- добавить отдельные validators и runtime images для новых форматов.
+
+### Этап 14. Production-подготовка
+
+Цель: подготовить сервис к более надежной эксплуатации.
+
+Нужно сделать:
+
+- перейти на PostgreSQL, если SQLite перестанет хватать;
+- добавить полноценные миграции Alembic;
+- разделить docker-compose на локальный, тестовый и production-like варианты;
+- добавить внешнее файловое хранилище при необходимости;
+- добавить структурированное логирование;
+- добавить мониторинг ошибок;
+- добавить rate limiting;
+- добавить webhook/callback при необходимости;
+- добавить backup/retention policy для artifacts и jobs.
+
+## 15. Риски и решения
 
 ### Долгая генерация
 
-Риск: обращение к OpenRouter и создание файла могут занимать слишком долго для синхронного API.
+Риск: OpenRouter, codegen, Docker sandbox и validation могут занимать слишком долго для синхронного HTTP-запроса.
 
-Решение для прототипа:
+Решение:
 
-- ставить разумный timeout;
-- возвращать понятную ошибку;
-- логировать длительность этапов.
+- `POST /documents` только создает job;
+- генерация идет в worker;
+- клиент использует polling через `GET /documents/{document_id}`;
+- готовый файл скачивается отдельно.
 
-Решение позже:
+### Перегрузка OpenRouter или Docker
 
-- очередь задач;
-- статус `pending`;
-- polling через `GET /documents/{document_id}`;
-- webhook/callback для клиента.
+Риск: слишком много одновременных задач может привести к лимитам OpenRouter, высокой нагрузке CPU/RAM и нестабильности Docker.
+
+Решение:
+
+- `WORKER_CONCURRENCY`;
+- лимиты CPU/RAM/timeout для sandbox;
+- max attempts;
+- понятный статус `failed`;
+- сохранение причины ошибки.
+
+### Зависшие задачи
+
+Риск: worker может упасть, когда job уже находится в `processing`.
+
+Решение:
+
+- `locked_at`;
+- `locked_by`;
+- `JOB_STALE_AFTER_SECONDS`;
+- восстановление зависших задач на старте worker;
+- возврат в `queued` или перевод в `failed`.
 
 ### Нестабильный JSON от LLM
 
@@ -654,22 +951,36 @@ API_INTERNAL_TOKEN=
 
 Решение:
 
-- строгий промпт;
+- строгий planning prompt;
 - Pydantic-валидация;
-- одна автоматическая попытка исправления JSON;
+- отдельный repair/fix prompt для JSON;
 - сохранение сырого ответа модели для диагностики.
 
-### Ошибки OpenRouter
+### Нестабильный Python-код от LLM
 
-Риск: внешний провайдер может быть недоступен, вернуть ошибку лимита или таймаут.
+Риск: codegen LLM может написать код, который падает или создает плохой `.docx`.
 
 Решение:
 
-- отдельный `OpenRouterClient`;
-- timeout;
-- обработка HTTP-ошибок;
-- сохранение ошибки в `LLMGeneration`;
-- понятный ответ клиенту.
+- строгий codegen contract;
+- запуск только в Docker sandbox;
+- сохранение traceback;
+- `DocxValidator`;
+- 1-2 repair retry;
+- отказ после исчерпания попыток.
+
+### Безопасность sandbox
+
+Риск: LLM-generated code может попытаться читать env, ходить в network или писать за пределы рабочей папки.
+
+Решение:
+
+- не запускать код на backend-хосте напрямую;
+- Docker container без secrets;
+- network disabled;
+- CPU/RAM/timeout limits;
+- монтировать только `/input` и `/output`;
+- принимать только `/output/result.docx`.
 
 ### Расширение форматов
 
@@ -677,50 +988,43 @@ API_INTERNAL_TOKEN=
 
 Решение:
 
-- общий `GenerationSpec`;
-- форматные варианты `ArtifactPlan`;
-- общий интерфейс `BaseRenderer`;
-- registry renderer-ов;
-- изоляция форматных библиотек внутри конкретных renderer-ов.
+- общий job lifecycle;
+- форматные spec-контракты;
+- отдельные runtime images;
+- отдельные validators;
+- общий интерфейс storage/status, но разные renderer/codegen adapters.
 
-### Безопасность API
-
-Риск: endpoint генерации может быть вызван кем угодно.
-
-Решение:
-
-- внутренний API-токен;
-- лимиты размера входного текста;
-- rate limiting позже;
-- не отдавать локальные пути файлов наружу.
-
-## 15. Принципы проекта
+## 16. Принципы проекта
 
 - Backend является самостоятельным API-сервисом.
+- API не должен блокироваться долгой генерацией.
+- `POST /documents` создает job и возвращает `202 Accepted`.
+- Worker выполняет generation pipeline в фоне.
 - Прототип создает `.docx`, но ядро проектируется под разные форматы.
 - Пользовательский запрос разбирается через LLM, потому что вход будет свободным и разговорным.
 - Все недостающие параметры заполняются стандартными значениями.
 - OpenRouter используется только через отдельный слой клиента и LLM-сервисов.
-- Renderer не должен знать, какая LLM использовалась.
-- LLM должна возвращать структурированный план, а не готовый файл.
-- Исходный запрос, ответ LLM, нормализованная спецификация и созданный файл хранятся отдельно.
+- Planning, codegen и repair являются разными LLM-ролями.
+- LLM должна возвращать структурированный план или код по строгому contract, а не готовый файл.
+- LLM-generated code нельзя запускать напрямую на сервере.
+- Sandbox не должен иметь доступ к env/secrets.
+- Исходный запрос, ответы LLM, спецификация, sandbox-логи и созданный файл хранятся отдельно.
 - Ошибки должны быть видны через API и сохранены для диагностики.
-- Локальная разработка должна запускаться одной командой.
+- Локальная разработка должна запускаться понятными командами для API и worker.
 
-## 16. Что делаем следующим шагом
+## 17. Что делаем следующим практическим шагом
 
-Следующий практический шаг - создать каркас FastAPI-проекта:
+Текущая версия уже прошла этапы 1-11: есть тестовый деплой, job-based backend, polling UI, `document_spec.json`, LLM codegen для `.docx` и Docker sandbox с fallback-renderer.
 
-1. `pyproject.toml`;
-2. пакет `app`;
-3. endpoint `GET /health`;
-4. конфигурацию `.env`;
-5. endpoint `POST /documents`;
-6. схемы `GenerationSpec` и `ArtifactPlan`;
-7. `OpenRouterClient`;
-8. `DefaultsResolver`;
-9. `RendererRegistry`;
-10. простой `DocxRenderer`;
-11. локальное сохранение файлов в `storage/artifacts`.
+Следующий практический шаг - этап 12: validator и repair retry.
 
-После этого можно будет собрать первый рабочий сквозной прототип: клиент отправляет свободный запрос в `POST /documents`, backend через OpenRouter получает план, генерирует `.docx` и возвращает ссылку на скачивание.
+Практический порядок для будущей реализации:
+
+1. Добавить `DocxValidator`.
+2. Проверять, что `.docx` открывается через `python-docx`.
+3. Проверять, что документ не пустой и содержит базовые элементы из `DocumentSpec`.
+4. Добавить repair prompt для исправления неудачного generated code.
+5. Передавать в repair `document_spec.json`, предыдущий код, stderr/stdout, traceback и ошибки validator-а.
+6. Ограничить repair 1-2 попытками.
+7. После неуспешных repair-попыток оставлять fallback-renderer или переводить job в `failed` в зависимости от настройки.
+8. Добавить тесты на успешную валидацию, ошибку sandbox и repair-попытку.
