@@ -84,8 +84,11 @@ nano .env
 ```text
 OPENROUTER_API_KEY=твой_ключ_openrouter
 OPENROUTER_MODEL=выбранная_модель
+OPENROUTER_CODEGEN_MODEL=anthropic/claude-sonnet-4.5
 PUBLIC_BASE_URL=http://SERVER_IP
 API_INTERNAL_TOKEN=любой_секретный_токен_для_UI_и_API
+DOCX_VALIDATION_ENABLED=true
+DOCX_CODEGEN_REPAIR_ATTEMPTS=1
 ```
 
 `API_INTERNAL_TOKEN` не является ключом OpenRouter. Это внутренний пароль для доступа к `/documents` из UI или другого клиента.

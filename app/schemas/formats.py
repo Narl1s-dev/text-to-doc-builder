@@ -31,6 +31,34 @@ def supported_render_format_values() -> tuple[str, ...]:
 
 def infer_artifact_format_from_prompt(prompt: str) -> ArtifactFormat | None:
     normalized = prompt.lower()
+    document_keywords = (
+        "сочинен",
+        "сочинён",
+        "сочинение",
+        "эссе",
+        "essay",
+        "реферат",
+        "отчет",
+        "отчёт",
+        "документ",
+        "статья",
+        "работа",
+        "report",
+        "document",
+    )
+    explicit_spreadsheet_keywords = (
+        "excel",
+        "xlsx",
+        "spreadsheet",
+        "электронн",
+        "книгу excel",
+        "файл excel",
+        "табличный файл",
+        "таблицу excel",
+    )
+    if any(keyword in normalized for keyword in explicit_spreadsheet_keywords):
+        return ArtifactFormat.xlsx
+
     format_keywords = {
         ArtifactFormat.pptx: (
             "презентац",
@@ -45,10 +73,9 @@ def infer_artifact_format_from_prompt(prompt: str) -> ArtifactFormat | None:
             "powerpoint",
         ),
         ArtifactFormat.xlsx: (
-            "таблиц",
-            "excel",
-            "xlsx",
-            "spreadsheet",
+            "электронную таблицу",
+            "табличный документ",
+            "табличный файл",
             "лист",
         ),
         ArtifactFormat.pdf: (
@@ -72,5 +99,9 @@ def infer_artifact_format_from_prompt(prompt: str) -> ArtifactFormat | None:
     }
     for artifact_format, keywords in format_keywords.items():
         if any(keyword in normalized for keyword in keywords):
+            if artifact_format == ArtifactFormat.xlsx and any(
+                keyword in normalized for keyword in document_keywords
+            ):
+                return ArtifactFormat.docx
             return artifact_format
     return None

@@ -863,7 +863,7 @@ FastAPI API
 - проверять появление `/output/result.docx`;
 - сохранять stdout/stderr и exit code.
 
-### Этап 12. Validator и repair retry
+### Этап 12. Validator и repair retry - выполнено
 
 Цель: сделать генерацию устойчивой к ошибкам codegen и плохим `.docx`.
 
@@ -876,7 +876,7 @@ FastAPI API
 - добавить repair prompt;
 - передавать в repair `document_spec.json`, предыдущий код, traceback и ошибки validator-а;
 - ограничить repair 1-2 попытками;
-- после исчерпания попыток переводить job в `failed`.
+- после исчерпания попыток использовать fallback-renderer или переводить job в `failed`, если fallback отключен.
 
 ### Этап 13. Новые форматы и assets
 
@@ -1016,15 +1016,14 @@ FastAPI API
 
 Текущая версия уже прошла этапы 1-11: есть тестовый деплой, job-based backend, polling UI, `document_spec.json`, LLM codegen для `.docx` и Docker sandbox с fallback-renderer.
 
-Следующий практический шаг - этап 12: validator и repair retry.
+Следующий практический шаг - этап 13: новые форматы и assets.
 
 Практический порядок для будущей реализации:
 
-1. Добавить `DocxValidator`.
-2. Проверять, что `.docx` открывается через `python-docx`.
-3. Проверять, что документ не пустой и содержит базовые элементы из `DocumentSpec`.
-4. Добавить repair prompt для исправления неудачного generated code.
-5. Передавать в repair `document_spec.json`, предыдущий код, stderr/stdout, traceback и ошибки validator-а.
-6. Ограничить repair 1-2 попытками.
-7. После неуспешных repair-попыток оставлять fallback-renderer или переводить job в `failed` в зависимости от настройки.
-8. Добавить тесты на успешную валидацию, ошибку sandbox и repair-попытку.
+1. Спроектировать `presentation_spec.json` для `.pptx`.
+2. Спроектировать `workbook_spec.json` для `.xlsx`.
+3. Спроектировать HTML/CSS pipeline для `.pdf`.
+4. Добавить asset pipeline для изображений.
+5. Сохранять источники изображений и metadata.
+6. Передавать assets в sandbox только через `/input/assets`.
+7. Добавить отдельные validators и runtime images для новых форматов.

@@ -69,3 +69,29 @@ def test_defaults_resolver_prompt_format_beats_llm_default_docx() -> None:
     assert spec.output_format == ArtifactFormat.pptx
     assert plan.output_format == ArtifactFormat.pptx
     assert warnings == []
+
+
+def test_defaults_resolver_keeps_essay_with_table_as_docx() -> None:
+    resolver = DefaultsResolver(Settings())
+    payload = DocumentCreateRequest(
+        prompt=(
+            "Напиши сочинение на английском о выцветании кораллов для студента 1 курса. "
+            "Добавь таблицу причин и последствий, маркированный список мер защиты, "
+            "нумерованный список этапов исследования и список источников."
+        )
+    )
+
+    fallback = resolver.fallback_plan(payload)
+
+    assert fallback.generation_spec.output_format == ArtifactFormat.docx
+    assert fallback.document_spec.output_format == ArtifactFormat.docx
+    assert fallback.artifact_plan.output_format == ArtifactFormat.docx
+
+
+def test_defaults_resolver_still_infers_explicit_excel_request() -> None:
+    resolver = DefaultsResolver(Settings())
+    payload = DocumentCreateRequest(prompt="Создай таблицу Excel с причинами и последствиями выцветания кораллов")
+
+    fallback = resolver.fallback_plan(payload)
+
+    assert fallback.generation_spec.output_format == ArtifactFormat.xlsx

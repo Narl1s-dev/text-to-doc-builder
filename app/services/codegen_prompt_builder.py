@@ -35,3 +35,45 @@ Runtime contract:
                 ),
             },
         ]
+
+    def build_docx_repair_messages(
+        self,
+        *,
+        document_spec: DocumentSpec,
+        previous_python_code: str,
+        sandbox_result: dict | None = None,
+        validation_errors: list[str] | None = None,
+    ) -> list[dict[str, str]]:
+        system_prompt = """
+You repair Python code that creates a DOCX file from document_spec.json.
+Return only valid JSON, without markdown fences or explanations.
+The JSON must contain exactly these top-level keys:
+- python_code
+- warnings
+
+Runtime contract:
+- Read /input/document_spec.json. It contains a JSON object with a top-level
+  "document_spec" key; the value is the document specification to render.
+- Write the final DOCX to /output/result.docx.
+- Use python-docx and Python standard library only.
+- Do not use network, environment variables, secrets, subprocesses, shell commands, or paths outside /input and /output.
+- Fix the previous code so it handles the reported sandbox or validation errors.
+- The script must fail loudly with a clear exception if it cannot create /output/result.docx.
+""".strip()
+
+        return [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "document_spec": document_spec.model_dump(mode="json"),
+                        "previous_python_code": previous_python_code,
+                        "sandbox_result": sandbox_result or {},
+                        "validation_errors": validation_errors or [],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+            },
+        ]

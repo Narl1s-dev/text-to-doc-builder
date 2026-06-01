@@ -96,6 +96,14 @@ Stage 11 adds LLM codegen and a Docker sandbox for `.docx`:
 - generated code, stdout, stderr, and sandbox result JSON are saved under `storage/artifacts/codegen/{document_id}`;
 - if codegen or sandbox execution fails, the built-in `.docx` renderer is used as fallback.
 
+Stage 12 adds `.docx` validation and repair retry:
+
+- generated `.docx` files are opened with `python-docx`;
+- validation checks readable text and required headings from `DocumentSpec`;
+- failed sandbox or validation attempts can trigger a codegen repair prompt;
+- repair receives `document_spec.json`, previous Python code, sandbox logs, and validation errors;
+- each attempt saves generated code, stdout, stderr, sandbox result, and validation result diagnostics.
+
 ## Run Locally
 
 ```powershell

@@ -48,6 +48,8 @@ class Settings(BaseSettings):
     docx_codegen_timeout_seconds: int = Field(default=30, ge=1)
     docx_codegen_memory_limit: str = "256m"
     docx_codegen_cpu_limit: float = Field(default=1.0, gt=0)
+    docx_validation_enabled: bool = True
+    docx_codegen_repair_attempts: int = Field(default=1, ge=0, le=3)
 
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,

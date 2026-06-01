@@ -47,6 +47,27 @@ class DocxCodeGenerator:
         result.raw_output = raw_output
         return result
 
+    def repair(
+        self,
+        *,
+        document_spec: DocumentSpec,
+        previous_python_code: str,
+        sandbox_result: dict | None = None,
+        validation_errors: list[str] | None = None,
+    ) -> DocxCodegenResult:
+        model = self.settings.openrouter_codegen_model or self.settings.openrouter_model
+        client = self.client or OpenRouterClient.from_settings(self.settings, model=model)
+        messages = self.prompt_builder.build_docx_repair_messages(
+            document_spec=document_spec,
+            previous_python_code=previous_python_code,
+            sandbox_result=sandbox_result,
+            validation_errors=validation_errors,
+        )
+        raw_output = client.create_chat_completion(messages)
+        result = parse_docx_codegen_response(raw_output)
+        result.raw_output = raw_output
+        return result
+
 
 def parse_docx_codegen_response(raw_output: str) -> DocxCodegenResult:
     cleaned = _strip_markdown_fence(raw_output)
