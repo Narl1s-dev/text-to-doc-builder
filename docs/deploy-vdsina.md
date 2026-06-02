@@ -96,8 +96,8 @@ DOCX_CODEGEN_REPAIR_ATTEMPTS=1
 ## 4. Запустить сервис
 
 ```bash
-docker compose --profile runtime build docx-runtime
-docker compose up -d --build
+docker compose build --no-cache
+docker compose up -d
 ```
 
 Проверить контейнер:
@@ -137,8 +137,8 @@ http://SERVER_IP/ui
 На сервере в папке проекта:
 
 ```bash
-docker compose --profile runtime build docx-runtime
-docker compose up -d --build
+docker compose build --no-cache
+docker compose up -d
 ```
 
 Если нужно посмотреть логи:

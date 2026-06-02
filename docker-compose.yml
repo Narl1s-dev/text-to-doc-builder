@@ -43,9 +43,9 @@ services:
       context: ./sandbox/docx-runtime
       dockerfile: Dockerfile
     image: text-to-doc-builder-docx-runtime:local
-    profiles:
-      - runtime
-    command: ["python", "-c", "print('docx runtime ready')"]
+    container_name: text-to-doc-builder-docx-runtime
+    restart: unless-stopped
+    command: ["python", "-c", "import time; time.sleep(10**9)"]
 
 volumes:
   text_to_doc_storage:

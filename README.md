@@ -137,16 +137,15 @@ Run the standalone worker when `WORKER_ENABLED=false` for the API process:
 python -m app.worker
 ```
 
-Build the `.docx` sandbox runtime image before enabling codegen:
+Build the application and `.docx` sandbox runtime images:
 
 ```powershell
-docker build -f sandbox/docx-runtime/Dockerfile -t text-to-doc-builder-docx-runtime:local sandbox/docx-runtime
+docker compose build --no-cache
 ```
 
 With Docker Compose:
 
 ```powershell
-docker compose --profile runtime build docx-runtime
 docker compose build --no-cache
 docker compose up -d
 ```
